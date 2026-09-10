@@ -1,0 +1,59 @@
+name: Mackolik arşiv
+
+on:
+  schedule:
+    - cron: '23 * * * *'        # her saat başı (xx:23), bilgisayar kapalıyken de çalışır
+  workflow_dispatch:
+    inputs:
+      mod:
+        description: 'normal = veri topla · test = teşhis (veriye dokunmaz) · csv = sadece CSV üret'
+        type: choice
+        default: normal
+        options: [normal, test, csv]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mackolik-arsiv
+  cancel-in-progress: false      # bir tur bitmeden diğeri başlamaz (çakışma olmaz)
+
+jobs:
+  cek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Veri çek
+        env:
+          MOD: ${{ inputs.mod || 'normal' }}
+          BUTCE_DK: '45'
+          YIL: '5'
+          PARALEL: '3'
+          BEKLE: '300'
+          LIGLER: ''            # boş = 5.3'teki tüm ligler. Örn: 'Premier Lig, Süper Lig, LaLiga'
+        run: node scraper/mackolik.mjs
+
+      - name: GitHub'a kaydet
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898341+github-actions[bot]@users.noreply.github.com"
+          git add -A data || true
+          git add -A debug || true
+          if git diff --cached --quiet; then echo "Değişiklik yok"; exit 0; fi
+          git commit -q -m "veri: $(date -u +'%Y-%m-%d %H:%M') UTC"
+          git pull -q --rebase --autostash || true
+          git push -q
+
+      - name: CSV'leri Releases'e yükle
+        if: hashFiles('cikti/*.csv') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view veri >/dev/null 2>&1 || gh release create veri --title "Mackolik veri (otomatik)" --notes "Her saat güncellenir. mackolik_tum.csv = bütün maçlar; yıllık dosyalar ayrıca."
+          gh release upload veri cikti/*.csv --clobber
