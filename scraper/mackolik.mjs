@@ -465,7 +465,7 @@ const karsilastir = r => JSON.stringify({ ...r, guncel: 0 });
 async function macIsle(aday, tarih) {
   let html;
   try { html = await getir(BASE + '/Match/Default.aspx?id=' + aday.id); }
-  catch { say.hata++; return; }
+  catch { return false; }
 
   const r = macAyristir(html, aday);
   if (!r.ms) { say.oynanmamis++; return; }
@@ -493,7 +493,15 @@ async function gunIsle(tarih, durum, sadeceEksik) {
   const taze = r => r && Date.now() - Date.parse(r.guncel || 0) < 12 * 3600e3;
   const isler = liste.filter(a => sadeceEksik ? !(istTamam(g[a.id]) || taze(g[a.id])) : !g[a.id]);
   const once = { ...say }, bas = Date.now();
-  await havuz(isler, a => macIsle(a, tarih));
+  // Hata veren maçlar kısa bir moladan sonra bir kez daha denenir
+  let hatali = [];
+  await havuz(isler, async a => { if (await macIsle(a, tarih) === false) hatali.push(a); });
+  if (hatali.length && !zamanBitti() && !engel) {
+    await sleep(5000);
+    const tekrar = hatali; hatali = [];
+    await havuz(tekrar, async a => { if (await macIsle(a, tarih) === false) hatali.push(a); });
+  }
+  say.hata += hatali.length;
   await kirliYaz();
   const f = k => say[k] - once[k];
   const sn = (Date.now() - bas) / 1000;
@@ -547,12 +555,18 @@ async function gecmisCalis() {
   const ust = gunEkle(ANKRAJ, -PARCA * k);
   const alt = gunEkle(ANKRAJ, -Math.min((PARCA + 1) * k, toplam) + 1);
   const durum = await durumYukle();
-  if (!durum.geri || durum.ust !== ust || durum.alt !== alt) Object.assign(durum, { ust, alt, geri: ust, bitti: false });
-  console.log(`Parça ${PARCA + 1}/${PARCA_SAYI}: ${ust} → ${alt} · kaldığı yer ${durum.geri} · ${PARALEL} paralel · ${BUTCE_DK} dk`);
+  if (!durum.geri || durum.ust !== ust || durum.alt !== alt) Object.assign(durum, { ust, alt, geri: ust, bitti: false, tur: 1 });
+  if (!durum.tur) durum.tur = 1;
+  // 1. tur her şeyi çeker; 2. tur aynı aralıkta sadece hata yüzünden kaçan maçları tamamlar
+  if (durum.bitti && durum.tur < 2) Object.assign(durum, { tur: 2, geri: ust, bitti: false });
+  console.log(`Parça ${PARCA + 1}/${PARCA_SAYI} · ${durum.tur}. tur${durum.tur === 2 ? ' (eksik tamamlama)' : ''}: ${ust} → ${alt} · kaldığı yer ${durum.geri} · ${PARALEL} paralel · ${BUTCE_DK} dk`);
   const notlar = [];
   let listeHata = 0;
   while (!durum.bitti && !zamanBitti() && !engel) {
-    if (durum.geri < alt) { durum.bitti = true; break; }
+    if (durum.geri < alt) {
+      if (durum.tur < 2) { Object.assign(durum, { tur: 2, geri: ust }); console.log('1. tur bitti → 2. tur: eksik maçlar tamamlanıyor'); continue; }
+      durum.bitti = true; break;
+    }
     try {
       if (await gunIsle(durum.geri, durum, false)) durum.geri = gunEkle(durum.geri, -1);
       listeHata = 0;
@@ -564,13 +578,13 @@ async function gecmisCalis() {
     }
     await durumYaz(durum);
   }
-  if (durum.geri < alt) durum.bitti = true;
+  if (durum.geri < alt && durum.tur >= 2) durum.bitti = true;
   await kirliYaz(); await durumYaz(durum);
   const yuzde = durum.bitti ? 100 : Math.round(gunFark(ust, durum.geri) / (gunFark(ust, alt) + 1) * 100);
   if (durum.bitti) await fs.writeFile(path.join(KOK, '.bitti'), '1');
   if (engel) await fs.writeFile(path.join(KOK, '.engel'), '1');
   await ozetYaz([`## Geçmiş parça ${PARCA + 1}/${PARCA_SAYI}`, sayOzet(),
-    `- ${durum.bitti ? 'TAMAMLANDI' : durum.geri + ' tarihine indi'} (%${yuzde}) · aralık ${alt} … ${ust}`,
+    `- ${durum.bitti ? 'TAMAMLANDI' : durum.tur + '. tur · ' + durum.geri + ' tarihine indi'} (%${yuzde}) · aralık ${alt} … ${ust}`,
     engel ? '- ⚠️ Mackolik art arda hata verdi, bu parça bir sonraki turda devam edecek.' : '', ...notlar]);
 }
 
