@@ -264,12 +264,10 @@ function satirLig(r) {
   return null;
 }
 const hamLig = r => Array.isArray(r[36]) ? r[36].filter(v => typeof v === 'string').join(' | ') : '';
-// Ham lig adından okunur ad: sezon ("2025/2026") ve kısa kodlar ("İNP") atılır
-const okunurLig = r => {
-  if (!Array.isArray(r[36])) return '';
-  const s = r[36].filter(v => typeof v === 'string' && v.trim() && !/^\d{4}\s*[\/-]\s*\d{2,4}$/.test(v.trim()) && (!/^[A-ZÇĞİÖŞÜ0-9.]{1,4}$/.test(v.trim()) || /^(ABD|BAE|KKTC)$/.test(v.trim())));
-  return [...new Set(s.map(x => x.trim()))].join(' - ');
-};
+// Ham lig: "Ülke | Lig | Sezon | | KOD" → okunur ad "Ülke - Lig"
+const okunurAd = p => { const a = (p[0] || '').trim(), b = (p[1] || '').trim(); return b && !/^\d{4}/.test(b) ? `${a} - ${b}` : a; };
+const okunurLig = r => Array.isArray(r[36]) ? okunurAd(r[36].filter(v => typeof v === 'string')) : '';
+const KANON = new Set(LIGLER.map(x => x.ad));
 const mbsSatir = r => {
   if (MBS_ALAN === null) return '';
   const v = r[MBS_ALAN];
@@ -522,6 +520,16 @@ async function guncelCalis() {
   if (!durum.ileri) ilk = gunEkle(ANKRAJ, 1);
   else if (durum.ileri < ilk) ilk = gunEkle(durum.ileri, 1);
   if (ilk <= ANKRAJ) ilk = gunEkle(ANKRAJ, 1);
+  // Önceki sürümün lig adlarındaki kod ekini ("… - ARJPBM") düzelt
+  for (let t = gunEkle(ANKRAJ, 1); t < bugun; t = gunEkle(t, 1)) {
+    const g = await gunYukle(t);
+    for (const r of Object.values(g)) {
+      if (!r.ligHam || KANON.has(r.lig)) continue;
+      const y = okunurAd(r.ligHam.split(' | '));
+      if (y && y !== r.lig) { r.lig = y; kirli.add(t); }
+    }
+  }
+  await kirliYaz();
   const notlar = [];
   for (let t = ilk; t < bugun && !zamanBitti() && !engel; t = gunEkle(t, 1)) {
     try { if (await gunIsle(t, durum, true) && (!durum.ileri || t > durum.ileri)) durum.ileri = t; }
