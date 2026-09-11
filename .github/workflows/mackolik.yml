@@ -2,58 +2,123 @@ name: Mackolik arşiv
 
 on:
   schedule:
-    - cron: '23 * * * *'        # her saat başı (xx:23), bilgisayar kapalıyken de çalışır
+    - cron: '23 * * * *'      # güncel: her saat son günler
+    - cron: '7 */6 * * *'     # geçmiş: 6 saatte bir (bittiyse hemen kapanır)
+    - cron: '45 2 * * *'      # CSV: her gece
   workflow_dispatch:
     inputs:
       mod:
-        description: 'normal = veri topla · test = teşhis (veriye dokunmaz) · csv = sadece CSV üret'
+        description: 'guncel · gecmis (5 yıllık taramayı başlat/devam) · test · csv'
         type: choice
-        default: normal
-        options: [normal, test, csv]
+        default: guncel
+        options: [guncel, gecmis, test, csv]
 
 permissions:
   contents: write
 
-concurrency:
-  group: mackolik-arsiv
-  cancel-in-progress: false      # bir tur bitmeden diğeri başlamaz (çakışma olmaz)
+env:
+  LIGLER: 'hepsi'             # hepsi = oranı açılan bütün maçlar
+  YIL: '5'
+  ANKRAJ: '2026-09-07'        # geçmiş tarama bu günden geriye, güncel ileriye
+  PARCA_SAYI: '6'             # geçmiş aynı anda kaç parçada taransın
 
 jobs:
-  cek:
+  guncel:
+    if: github.event.schedule == '23 * * * *' || inputs.mod == 'guncel' || inputs.mod == 'test'
     runs-on: ubuntu-latest
     timeout-minutes: 58
+    concurrency: { group: guncel, cancel-in-progress: false }
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
+        with: { node-version: 22 }
       - name: Veri çek
         env:
-          MOD: ${{ inputs.mod || 'normal' }}
+          MOD: ${{ inputs.mod || 'guncel' }}
           BUTCE_DK: '45'
-          YIL: '5'
-          PARALEL: '3'
-          BEKLE: '300'
-          LIGLER: ''            # boş = 5.3'teki tüm ligler. Örn: 'Premier Lig, Süper Lig, LaLiga'
+          PARALEL: '4'
+          BEKLE: '150'
         run: node scraper/mackolik.mjs
-
       - name: GitHub'a kaydet
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898341+github-actions[bot]@users.noreply.github.com"
-          git add -A data || true
-          git add -A debug || true
-          if git diff --cached --quiet; then echo "Değişiklik yok"; exit 0; fi
-          git commit -q -m "veri: $(date -u +'%Y-%m-%d %H:%M') UTC"
-          git pull -q --rebase --autostash || true
-          git push -q
+          git add -A data; [ -d debug ] && git add -A debug
+          git diff --cached --quiet && { echo "Değişiklik yok"; exit 0; }
+          git commit -q -m "güncel: $(date -u +'%Y-%m-%d %H:%M') UTC"
+          for n in 1 2 3 4 5 6; do
+            if git pull -q --rebase && git push -q; then exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((RANDOM % 20 + 5))
+          done
+          exit 1
 
-      - name: CSV'leri Releases'e yükle
-        if: hashFiles('cikti/*.csv') != ''
+  gecmis:
+    if: github.event.schedule == '7 */6 * * *' || inputs.mod == 'gecmis'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        parca: [0, 1, 2, 3, 4, 5]
+    concurrency: { group: 'gecmis-${{ matrix.parca }}', cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Geçmişi tara (parça ${{ matrix.parca }})
+        env:
+          MOD: gecmis
+          PARCA: ${{ matrix.parca }}
+          BUTCE_DK: '25'
+          PARALEL: '6'
+          BEKLE: '100'
+        run: |
+          # Otomatik turlar ancak elle bir kez "gecmis" başlatıldıktan sonra devreye girer
+          if [ "${{ github.event_name }}" = "schedule" ] && [ ! -f "data/durum/gecmis-$PARCA.json" ]; then
+            echo "Geçmiş tarama henüz başlatılmadı."; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898341+github-actions[bot]@users.noreply.github.com"
+          kaydet() {
+            git add -A data
+            git diff --cached --quiet && return 0
+            git commit -q -m "geçmiş $((PARCA+1))/$PARCA_SAYI: $(date -u +'%Y-%m-%d %H:%M') UTC"
+            for n in 1 2 3 4 5 6 7 8; do
+              if git pull -q --rebase && git push -q; then return 0; fi
+              git rebase --abort 2>/dev/null || true
+              sleep $((RANDOM % 30 + 5))
+            done
+            echo "push başarısız"; return 0
+          }
+          hata=0
+          # ~5 saat boyunca 25 dakikalık turlar; her turdan sonra GitHub'a kaydeder
+          while [ $SECONDS -lt 18600 ]; do
+            if ! node scraper/mackolik.mjs; then hata=$((hata+1)); fi
+            kaydet
+            [ -f .bitti ] && { echo "Bu parça tamamlandı."; break; }
+            [ -f .engel ] && { echo "Mackolik hata veriyor, sonraki turda devam."; break; }
+            [ $hata -ge 3 ] && break
+          done
+
+  csv:
+    if: github.event.schedule == '45 2 * * *' || inputs.mod == 'csv'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency: { group: csv, cancel-in-progress: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: CSV üret
+        env: { MOD: csv }
+        run: node --max-old-space-size=6000 scraper/mackolik.mjs
+      - name: Releases'e yükle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view veri >/dev/null 2>&1 || gh release create veri --title "Mackolik veri (otomatik)" --notes "Her saat güncellenir. mackolik_tum.csv = bütün maçlar; yıllık dosyalar ayrıca."
-          gh release upload veri cikti/*.csv --clobber
+          cd cikti
+          zip -q -9 mackolik_tum.zip mackolik_tum.csv && rm mackolik_tum.csv
+          gh release view veri >/dev/null 2>&1 || gh release create veri --title "Mackolik veri (otomatik)" --notes "Her gece güncellenir. mackolik_tum.zip = bütün maçlar (içinde CSV); yıllık CSV'ler ayrıca."
+          gh release delete-asset veri mackolik_tum.csv -y 2>/dev/null || true
+          gh release upload veri *.csv mackolik_tum.zip --clobber
