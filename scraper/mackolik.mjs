@@ -214,6 +214,14 @@ function metinCoz(buf, ct) {
 }
 
 let ardHata = 0, engel = false, ekBekle = 0, istekSay = 0;
+// Uyarlanır paralellik: Mackolik zorlanınca aynı anda giden istek sayısı düşer, rahatlayınca geri artar
+let aktif = Math.min(PARALEL, 3), seri = 0, sonDusus = 0;
+const basari = () => { ardHata = 0; ekBekle = Math.max(0, ekBekle * 0.8 - 50); if (++seri >= 15 && aktif < PARALEL) { aktif++; seri = 0; } };
+const zorlandi = ms => {
+  seri = 0;
+  ekBekle = Math.min(ekBekle + ms, 6000);
+  if (Date.now() - sonDusus > 4000 && aktif > 2) { aktif--; sonDusus = Date.now(); }
+};
 async function getir(url, deneme = 3) {
   let son = null;
   for (let i = 1; i <= deneme; i++) {
@@ -222,18 +230,17 @@ async function getir(url, deneme = 3) {
       const r = await fetch(url, { headers: HDR, redirect: 'follow', signal: AbortSignal.timeout(30000) });
       if (r.status === 200) {
         const buf = Buffer.from(await r.arrayBuffer());
-        ardHata = 0;
-        ekBekle = Math.max(0, ekBekle * 0.9 - 20);
+        basari();
         return metinCoz(buf, r.headers.get('content-type'));
       }
       if (r.status === 404 || r.status === 410) throw new KaliciHata('HTTP ' + r.status);
       son = new Error('HTTP ' + r.status);
-      if (r.status === 429 || r.status >= 500) ekBekle = Math.min(ekBekle + 2000, 20000);
+      if (r.status === 429 || r.status >= 500) zorlandi(1000);
       if (i < deneme) await sleep(r.status === 429 || r.status === 503 ? 10000 * i : 1500 * i);
     } catch (e) {
       if (e instanceof KaliciHata) throw e;
       son = e;
-      ekBekle = Math.min(ekBekle + 500, 20000);
+      zorlandi(400);
       if (i < deneme) await sleep(1500 * i);
     }
   }
@@ -451,8 +458,9 @@ const istTamam = r => r && Object.keys(r.ist || {}).length >= 3;
 
 async function havuz(isler, fn) {
   let i = 0;
-  await Promise.all(Array.from({ length: PARALEL }, async () => {
+  await Promise.all(Array.from({ length: PARALEL }, async (_, w) => {
     while (i < isler.length && !zamanBitti() && !engel) {
+      if (w >= aktif) { await sleep(500); continue; }   // fazla işçi, Mackolik rahatlayana kadar bekler
       await fn(isler[i++]);
       const b = BEKLE + ekBekle;
       if (b) await sleep(b);
@@ -507,7 +515,7 @@ async function gunIsle(tarih, durum, sadeceEksik) {
   const sn = (Date.now() - bas) / 1000;
   console.log(`${trTarih(tarih)} · listede ${liste.length} · işlenen ${isler.length} → +${f('yeni')} yeni, ${f('guncellenen')} güncel, ` +
     `${f('istatistikli')} ist., ${f('mbsli')} MBS, ${f('oransiz')} oransız, ${f('oynanmamis')} oynanmamış, ${f('hata')} hata` +
-    (isler.length ? ` · ${(isler.length / Math.max(sn, 0.1)).toFixed(1)} maç/sn` : '') + (ekBekle > 500 ? ` · yavaşlatıldı (+${Math.round(ekBekle)} ms)` : ''));
+    (isler.length ? ` · ${(isler.length / Math.max(sn, 0.1)).toFixed(1)} maç/sn` : '') + ` · ${aktif} paralel` + (ekBekle > 500 ? ` · yavaşlatıldı (+${Math.round(ekBekle)} ms)` : ''));
   return !zamanBitti() && !engel;
 }
 
@@ -652,26 +660,30 @@ function csvSatir(r) {
 }
 
 // Dosyalar gün gün eklenerek yazılır (yüz binlerce satır belleği şişirmez)
+// IST_FILTRE=1 (varsayılan): istatistiği olmayan maçlar CSV'ye yazılmaz. Depodaki JSON veri eksiksiz kalır.
+const IST_FILTRE = (process.env.IST_FILTRE ?? '1') !== '0';
 async function csvHepsi() {
   const kok = path.join(VERI, 'maclar');
   await fs.rm(CIKTI, { recursive: true, force: true });
   await fs.mkdir(CIKTI, { recursive: true });
   const tumF = path.join(CIKTI, 'mackolik_tum.csv');
   await fs.writeFile(tumF, csvBaslik());
-  let toplam = 0;
+  let toplam = 0, elenen = 0;
   for (const y of (await fs.readdir(kok).catch(() => [])).filter(x => /^\d{4}$/.test(x)).sort()) {
     const yF = path.join(CIKTI, `mackolik_${y}.csv`);
     await fs.writeFile(yF, csvBaslik());
     for (const m of (await fs.readdir(path.join(kok, y))).filter(x => /^\d{2}$/.test(x)).sort())
       for (const f of (await fs.readdir(path.join(kok, y, m))).filter(x => x.endsWith('.json')).sort()) {
         const o = JSON.parse(await fs.readFile(path.join(kok, y, m, f), 'utf8'));
-        const parca = Object.values(o).map(csvSatir).join('');
+        const maclar = Object.values(o).filter(r => !IST_FILTRE || istTamam(r));
+        elenen += Object.keys(o).length - maclar.length;
+        const parca = maclar.map(csvSatir).join('');
         await fs.appendFile(yF, parca); await fs.appendFile(tumF, parca);
-        toplam += Object.keys(o).length;
+        toplam += maclar.length;
       }
   }
-  console.log(`CSV: ${toplam} maç`);
-  await ozetYaz([`## CSV`, `- ${toplam} maç yazıldı`]);
+  console.log(`CSV: ${toplam} maç yazıldı, istatistiksiz ${elenen} maç elendi`);
+  await ozetYaz([`## CSV`, `- ${toplam} maç yazıldı` + (IST_FILTRE ? ` · istatistiği olmayan ${elenen} maç elendi (depoda duruyor)` : '')]);
 }
 
 /* ==================================================================
