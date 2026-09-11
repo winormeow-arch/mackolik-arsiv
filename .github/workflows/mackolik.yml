@@ -20,7 +20,7 @@ env:
   LIGLER: 'hepsi'             # hepsi = oranı açılan bütün maçlar
   YIL: '5'
   ANKRAJ: '2026-09-07'        # geçmiş tarama bu günden geriye, güncel ileriye
-  PARCA_SAYI: '6'             # geçmiş aynı anda kaç parçada taransın
+  PARCA_SAYI: '16'            # geçmiş aynı anda kaç parçada taransın (her parça ayrı makine = ayrı IP)
 
 jobs:
   guncel:
@@ -60,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        parca: [0, 1, 2, 3, 4, 5]
+        parca: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     concurrency: { group: 'gecmis-${{ matrix.parca }}', cancel-in-progress: false }
     steps:
       - uses: actions/checkout@v4
