@@ -557,6 +557,41 @@ async function guncelCalis() {
   await ozetYaz(['## Güncel (son günler)', sayOzet(), `- Son işlenen gün: ${durum.ileri || '-'}`, ...notlar]);
 }
 
+/* ---------- DURUM.md: depoda görünen ilerleme tablosu ---------- */
+async function durumMdYaz(tumGunler, bosSet) {
+  const dolu = tumGunler.length - bosSet.size;
+  const yuzde = Math.round(dolu / tumGunler.length * 100);
+  const bar = '█'.repeat(Math.round(yuzde / 4)) + '░'.repeat(25 - Math.round(yuzde / 4));
+  // yıl bazında dolu/boş gün
+  const yil = {};
+  for (const t of tumGunler) {
+    const y = t.slice(0, 4);
+    (yil[y] || (yil[y] = { dolu: 0, top: 0 })).top++;
+    if (!bosSet.has(t)) yil[y].dolu++;
+  }
+  let mac = 0;
+  const kok = path.join(VERI, 'maclar');
+  for (const y of (await fs.readdir(kok).catch(() => [])).sort())
+    for (const m of (await fs.readdir(path.join(kok, y)).catch(() => [])).sort())
+      for (const f of await fs.readdir(path.join(kok, y, m)).catch(() => []))
+        mac += Object.keys(JSON.parse(await fs.readFile(path.join(kok, y, m, f), 'utf8'))).length;
+
+  const sat = [
+    '# Mackolik arşivi — ilerleme', '',
+    `\`${bar}\`  **%${yuzde}**`, '',
+    `- Toplanan maç: **${mac.toLocaleString('tr-TR')}**`,
+    `- Taranan gün: **${dolu} / ${tumGunler.length}** · kalan ${bosSet.size} gün`,
+    `- Son güncelleme: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, '',
+    '## Yıllara göre', '', '| Yıl | Taranan gün | Durum |', '| --- | --- | --- |',
+    ...Object.keys(yil).sort().reverse().map(y => {
+      const v = yil[y], p = Math.round(v.dolu / v.top * 100);
+      return `| ${y} | ${v.dolu} / ${v.top} | ${'█'.repeat(Math.round(p / 10))}${'░'.repeat(10 - Math.round(p / 10))} %${p} |`;
+    }), '',
+    'Bu dosyayı toplayıcı kendisi yazar; her turda güncellenir.'
+  ];
+  await fs.writeFile(path.join(KOK, 'DURUM.md'), sat.join('\n') + '\n');
+}
+
 /* ---------- geçmiş: iş paylaşımlı tarama ----------
    Sabit aralık yok. Her tur, 5 yılda henüz hiç çekilmemiş günlerin listesi
    çıkarılır ve iş bu listeye PARCA/PARCA_SAYI oranında bir noktadan girer.
@@ -574,6 +609,8 @@ async function gecmisCalis() {
   const dosyaVar = async t => { try { return (await fs.stat(gunDosya(t))).size > 5; } catch { return false; } };
   const bosGunler = [];
   for (const t of tumGunler) if (!await dosyaVar(t)) bosGunler.push(t);
+
+  await durumMdYaz(tumGunler, new Set(bosGunler));
 
   let sira, etiket;
   if (bosGunler.length) {
@@ -605,10 +642,14 @@ async function gecmisCalis() {
     durum.son = t;
     await durumYaz(durum);
   }
+  // Tur sonunda tabloyu tazele
+  const kalanGunler = [];
+  for (const t of tumGunler) if (!await dosyaVar(t)) kalanGunler.push(t);
+  await durumMdYaz(tumGunler, new Set(kalanGunler));
   const hepsiBitti = durum.tur >= 2 && islenen >= sira.length;
   durum.bitti = hepsiBitti;
   await kirliYaz(); await durumYaz(durum);
-  const kalan = Math.max(0, bosGunler.length - islenen);
+  const kalan = kalanGunler.length;
   const yuzde = Math.round((toplam - kalan) / toplam * 100);
   if (hepsiBitti) await fs.writeFile(path.join(KOK, '.bitti'), '1');
   if (engel) await fs.writeFile(path.join(KOK, '.engel'), '1');
