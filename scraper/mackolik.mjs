@@ -202,6 +202,7 @@ function istatistik(html) {
 const HDR = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
   'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.7',
+  'Accept-Encoding': 'gzip, deflate',
   'Referer': BASE + '/Canli-Sonuclar'
 };
 class KaliciHata extends Error {}
@@ -227,7 +228,7 @@ async function getir(url, deneme = 3) {
   for (let i = 1; i <= deneme; i++) {
     try {
       istekSay++;
-      const r = await fetch(url, { headers: HDR, redirect: 'follow', signal: AbortSignal.timeout(30000) });
+      const r = await fetch(url, { headers: HDR, redirect: 'follow', signal: AbortSignal.timeout(20000) });
       if (r.status === 200) {
         const buf = Buffer.from(await r.arrayBuffer());
         basari();
@@ -236,12 +237,12 @@ async function getir(url, deneme = 3) {
       if (r.status === 404 || r.status === 410) throw new KaliciHata('HTTP ' + r.status);
       son = new Error('HTTP ' + r.status);
       if (r.status === 429 || r.status >= 500) zorlandi(1000);
-      if (i < deneme) await sleep(r.status === 429 || r.status === 503 ? 10000 * i : 1500 * i);
+      if (i < deneme) await sleep(r.status === 429 || r.status === 503 ? 4000 * i : 1200 * i);
     } catch (e) {
       if (e instanceof KaliciHata) throw e;
       son = e;
       zorlandi(400);
-      if (i < deneme) await sleep(1500 * i);
+      if (i < deneme) await sleep(1200 * i);
     }
   }
   if (++ardHata >= 30) engel = true;
