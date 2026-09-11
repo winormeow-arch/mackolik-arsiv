@@ -557,43 +557,63 @@ async function guncelCalis() {
   await ozetYaz(['## Güncel (son günler)', sayOzet(), `- Son işlenen gün: ${durum.ileri || '-'}`, ...notlar]);
 }
 
-/* ---------- geçmiş: 5 yılı PARCA_SAYI parçaya böl, bu iş PARCA'yı tarar ---------- */
+/* ---------- geçmiş: iş paylaşımlı tarama ----------
+   Sabit aralık yok. Her tur, 5 yılda henüz hiç çekilmemiş günlerin listesi
+   çıkarılır ve iş bu listeye PARCA/PARCA_SAYI oranında bir noktadan girer.
+   Böylece bir bölge erken bittiğinde o makine boş kalmaz, kalan boş günlere
+   geçer. Kendi bölgesi ve liste bittiğinde 2. tura (eksik maç tamamlama) geçer. */
 async function gecmisCalis() {
   const toplam = Math.round(YIL * 365.25);
+  const tumGunler = Array.from({ length: toplam }, (_, i) => gunEkle(ANKRAJ, -i));
   const k = Math.ceil(toplam / PARCA_SAYI);
   const ust = gunEkle(ANKRAJ, -PARCA * k);
   const alt = gunEkle(ANKRAJ, -Math.min((PARCA + 1) * k, toplam) + 1);
   const durum = await durumYukle();
-  if (!durum.geri || durum.ust !== ust || durum.alt !== alt) Object.assign(durum, { ust, alt, geri: ust, bitti: false, tur: 1 });
-  if (!durum.tur) durum.tur = 1;
-  // 1. tur her şeyi çeker; 2. tur aynı aralıkta sadece hata yüzünden kaçan maçları tamamlar
-  if (durum.bitti && durum.tur < 2) Object.assign(durum, { tur: 2, geri: ust, bitti: false });
-  console.log(`Parça ${PARCA + 1}/${PARCA_SAYI} · ${durum.tur}. tur${durum.tur === 2 ? ' (eksik tamamlama)' : ''}: ${ust} → ${alt} · kaldığı yer ${durum.geri} · ${PARALEL} paralel · ${BUTCE_DK} dk`);
+  durum.ust = ust; durum.alt = alt; durum.tur = durum.tur || 1;
+
+  const dosyaVar = async t => { try { return (await fs.stat(gunDosya(t))).size > 5; } catch { return false; } };
+  const bosGunler = [];
+  for (const t of tumGunler) if (!await dosyaVar(t)) bosGunler.push(t);
+
+  let sira, etiket;
+  if (bosGunler.length) {
+    // Boş günler: kendi payının başladığı noktadan itibaren, liste sonunda başa sarar
+    const bas = Math.floor(PARCA * bosGunler.length / PARCA_SAYI);
+    sira = bosGunler.slice(bas).concat(bosGunler.slice(0, bas));
+    etiket = `1. tur · ${bosGunler.length} boş gün kaldı · ${sira[0]} tarihinden başlıyor`;
+  } else {
+    // Hiç boş gün kalmadı: kendi bölgesinde hata yüzünden kaçan maçları topla
+    durum.tur = 2;
+    sira = tumGunler.filter(t => t <= ust && t >= alt);
+    etiket = `2. tur (eksik maç tamamlama) · ${alt} … ${ust}`;
+  }
+  console.log(`Parça ${PARCA + 1}/${PARCA_SAYI} · ${etiket} · ${PARALEL} paralel · ${BUTCE_DK} dk`);
+
   const notlar = [];
-  let listeHata = 0;
-  while (!durum.bitti && !zamanBitti() && !engel) {
-    if (durum.geri < alt) {
-      if (durum.tur < 2) { Object.assign(durum, { tur: 2, geri: ust }); console.log('1. tur bitti → 2. tur: eksik maçlar tamamlanıyor'); continue; }
-      durum.bitti = true; break;
-    }
+  let listeHata = 0, islenen = 0;
+  for (const t of sira) {
+    if (zamanBitti() || engel) break;
     try {
-      if (await gunIsle(durum.geri, durum, false)) durum.geri = gunEkle(durum.geri, -1);
-      listeHata = 0;
+      await gunIsle(t, durum, false);
+      islenen++; listeHata = 0;
     } catch (e) {
-      notlar.push(`- ${durum.geri}: ${e.message}`);
-      console.log(`${durum.geri} HATA: ${e.message}`);
+      notlar.push(`- ${t}: ${e.message}`);
+      console.log(`${t} HATA: ${e.message}`);
       if (++listeHata >= 3) break;
       await sleep(20000);
     }
+    durum.son = t;
     await durumYaz(durum);
   }
-  if (durum.geri < alt && durum.tur >= 2) durum.bitti = true;
+  const hepsiBitti = durum.tur >= 2 && islenen >= sira.length;
+  durum.bitti = hepsiBitti;
   await kirliYaz(); await durumYaz(durum);
-  const yuzde = durum.bitti ? 100 : Math.round(gunFark(ust, durum.geri) / (gunFark(ust, alt) + 1) * 100);
-  if (durum.bitti) await fs.writeFile(path.join(KOK, '.bitti'), '1');
+  const kalan = Math.max(0, bosGunler.length - islenen);
+  const yuzde = Math.round((toplam - kalan) / toplam * 100);
+  if (hepsiBitti) await fs.writeFile(path.join(KOK, '.bitti'), '1');
   if (engel) await fs.writeFile(path.join(KOK, '.engel'), '1');
   await ozetYaz([`## Geçmiş parça ${PARCA + 1}/${PARCA_SAYI}`, sayOzet(),
-    `- ${durum.bitti ? 'TAMAMLANDI' : durum.tur + '. tur · ' + durum.geri + ' tarihine indi'} (%${yuzde}) · aralık ${alt} … ${ust}`,
+    `- ${hepsiBitti ? 'TAMAMLANDI' : `${islenen} gün işlendi · arşivin %${yuzde}'i dolu · ${kalan} boş gün kaldı`}`,
     engel ? '- ⚠️ Mackolik art arda hata verdi, bu parça bir sonraki turda devam edecek.' : '', ...notlar]);
 }
 
