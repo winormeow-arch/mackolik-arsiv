@@ -499,8 +499,14 @@ async function gunIsle(tarih, durum, sadeceEksik) {
   // Son günlerde: istatistiği eksik maçlar en fazla ~12 saatte bir yeniden denenir
   const taze = r => r && Date.now() - Date.parse(r.guncel || 0) < 12 * 3600e3;
   const isler = liste.filter(a => sadeceEksik ? !(istTamam(ay[a.id]) || taze(ay[a.id])) : !ay[a.id]);
+  const once = { ...say }, bas = Date.now();
   await havuz(isler, a => macIsle(a, tarih, durum));
   await kirliYaz();
+  const fark = k => say[k] - once[k];
+  const sn = (Date.now() - bas) / 1000;
+  console.log(`${trTarih(tarih)} · listede ${liste.length} maç, işlenen ${isler.length} → +${fark('yeni')} yeni, ${fark('guncellenen')} güncel, ` +
+    `${fark('istatistikli')} istatistikli, ${fark('oransiz')} oransız, ${fark('oynanmamis')} oynanmamış, ${fark('hata')} hata` +
+    (isler.length ? ` · ${(isler.length / Math.max(sn, 0.1)).toFixed(1)} maç/sn` : ''));
   return !zamanBitti() && !engel;   // gün tamamen bitti mi
 }
 
@@ -632,6 +638,7 @@ async function normalCalis() {
   if (!durum.geri) durum.geri = gunEkle(bugun, -(SON_GUN + 1));
   if (!durum.baslangic) durum.baslangic = durum.geri;
   const notlar = [];
+  console.log(`Başladı · bugün ${bugun} · geçmiş tarama ${durum.bitti ? 'tamam' : durum.geri + ' tarihinden geriye'} · hedef ${altSinir} · ${SECILI.size} lig · ${BUTCE_DK} dk`);
 
   // A) Son günler: yeni biten maçlar + geç gelen istatistikler (kesinti olduysa aradaki günler de)
   let ilk = gunEkle(bugun, -SON_GUN);
@@ -640,7 +647,7 @@ async function normalCalis() {
   for (let t = ilk; t < bugun && !zamanBitti() && !engel; t = gunEkle(t, 1)) {
     try {
       if (await gunIsle(t, durum, true)) durum.ileri = t;
-    } catch (e) { notlar.push(`${t}: ${e.message}`); break; }
+    } catch (e) { notlar.push(`${t}: ${e.message}`); console.log(`${t} HATA: ${e.message}`); break; }
     await durumYaz(durum);
   }
 
@@ -653,6 +660,7 @@ async function normalCalis() {
       listeHata = 0;
     } catch (e) {
       notlar.push(`${durum.geri}: ${e.message}`);
+      console.log(`${durum.geri} HATA: ${e.message}`);
       if (++listeHata >= 3) break;
       await sleep(20000);
     }
