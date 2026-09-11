@@ -589,7 +589,7 @@ async function durumMdYaz(tumGunler, bosSet) {
     }), '',
     'Bu dosyayı toplayıcı kendisi yazar; her turda güncellenir.'
   ];
-  await fs.writeFile(path.join(KOK, 'DURUM.md'), sat.join('\n') + '\n');
+  await fs.writeFile(path.join(VERI, 'DURUM.md'), sat.join('\n') + '\n');
 }
 
 /* ---------- geçmiş: iş paylaşımlı tarama ----------
