@@ -533,8 +533,17 @@ const sayOzet = () => `- Eklenen **${say.yeni}** · güncellenen ${say.guncellen
   `- Oransız ${say.oransiz} · oynanmamış ${say.oynanmamis} · hata ${say.hata} · istek ${istekSay}`;
 
 /* ---------- güncel: ANKRAJ'dan sonraki günler, her saat ---------- */
+const ONARIM_SURUM = 2;
 async function guncelCalis() {
   await eskiTemizle();
+  // Lig adı onarımı bir kez kendiliğinden çalışır (işaret dosyası varsa atlanır)
+  const isaret = path.join(VERI, 'durum', `onarim-v${ONARIM_SURUM}.json`);
+  try { await fs.stat(isaret); }
+  catch {
+    await ligOnar();
+    await fs.mkdir(path.dirname(isaret), { recursive: true });
+    await fs.writeFile(isaret, JSON.stringify({ surum: ONARIM_SURUM, tarih: new Date().toISOString() }) + '\n');
+  }
   const durum = await durumYukle();
   const bugun = trBugun();
   let ilk = gunEkle(bugun, -SON_GUN);
@@ -796,8 +805,8 @@ async function testCalis() {
 /* ==================================================================
    10) Başlat
    ================================================================== */
-if (MOD === 'onar') {
-  // Tek seferlik: kayıtlı maçların lig adını ham lig metninden yeniden hesaplar.
+// Tek seferlik: kayıtlı maçların lig adını ham lig metninden yeniden hesaplar.
+async function ligOnar() {
   const kok = path.join(VERI, 'maclar');
   let bakilan = 0, duzeltilen = 0;
   for (const y of (await fs.readdir(kok).catch(() => [])).filter(x => /^\d{4}$/.test(x)).sort())
@@ -816,7 +825,10 @@ if (MOD === 'onar') {
       }
   console.log(`Onarım: ${bakilan} maç bakıldı, ${duzeltilen} lig adı düzeltildi.`);
   await ozetYaz(['## Lig adı onarımı', `- ${duzeltilen} / ${bakilan} maçın lig adı düzeltildi`]);
-} else if (MOD === 'durum') {
+}
+
+if (MOD === 'onar') await ligOnar();
+else if (MOD === 'durum') {
   // Sadece DURUM.md'yi tazeler. Depodan yeni veri çekildikten SONRA çalıştırılır,
   // böylece tablo 16 makinenin ortak durumunu gösterir.
   const toplam = Math.round(YIL * 365.25);
