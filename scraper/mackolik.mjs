@@ -317,7 +317,9 @@ async function gunListesi(tarih, durum, rapor) {
     const genc = TAKIM_YASAK.test(sade(String(r[2] || ''))) || TAKIM_YASAK.test(sade(String(r[4] || '')));
     const kanon = genc ? null : satirLig(r);
     if (!HEPSI && !(kanon && SECILI.has(kanon))) continue;
-    const lig = kanon || okunurLig(r) || hamLig(r) || '?';
+    // Bütün ligler modunda lig adı Mackolik'in kendi adıdır; kanonik eşleştirme
+    // alt ligleri yanlış üst lige yazabiliyor (ör. "Non League Premier" → "Premier Lig").
+    const lig = (HEPSI ? okunurLig(r) : kanon) || okunurLig(r) || hamLig(r) || '?';
     if (rapor) {
       const k = hamLig(r);
       const e = rapor.harita[k] || (rapor.harita[k] = { lig, adet: 0, ornek: `${r[2]} - ${r[4]}` });
@@ -794,7 +796,35 @@ async function testCalis() {
 /* ==================================================================
    10) Başlat
    ================================================================== */
-if (MOD === 'test') await testCalis();
+if (MOD === 'onar') {
+  // Tek seferlik: kayıtlı maçların lig adını ham lig metninden yeniden hesaplar.
+  const kok = path.join(VERI, 'maclar');
+  let bakilan = 0, duzeltilen = 0;
+  for (const y of (await fs.readdir(kok).catch(() => [])).filter(x => /^\d{4}$/.test(x)).sort())
+    for (const m of (await fs.readdir(path.join(kok, y))).filter(x => /^\d{2}$/.test(x)).sort())
+      for (const f of (await fs.readdir(path.join(kok, y, m))).filter(x => x.endsWith('.json')).sort()) {
+        const dosya = path.join(kok, y, m, f);
+        const o = JSON.parse(await fs.readFile(dosya, 'utf8'));
+        let degisti = false;
+        for (const r of Object.values(o)) {
+          bakilan++;
+          if (!r.ligHam) continue;
+          const yeni = okunurAd(r.ligHam.split(' | '));
+          if (yeni && yeni !== r.lig) { r.lig = yeni; duzeltilen++; degisti = true; }
+        }
+        if (degisti) await fs.writeFile(dosya, jsonSatir(o));
+      }
+  console.log(`Onarım: ${bakilan} maç bakıldı, ${duzeltilen} lig adı düzeltildi.`);
+  await ozetYaz(['## Lig adı onarımı', `- ${duzeltilen} / ${bakilan} maçın lig adı düzeltildi`]);
+} else if (MOD === 'durum') {
+  // Sadece DURUM.md'yi tazeler. Depodan yeni veri çekildikten SONRA çalıştırılır,
+  // böylece tablo 16 makinenin ortak durumunu gösterir.
+  const toplam = Math.round(YIL * 365.25);
+  const tumGunler = Array.from({ length: toplam }, (_, i) => gunEkle(ANKRAJ, -i));
+  const bos = new Set();
+  for (const t of tumGunler) { try { if ((await fs.stat(gunDosya(t))).size <= 5) bos.add(t); } catch { bos.add(t); } }
+  await durumMdYaz(tumGunler, bos);
+} else if (MOD === 'test') await testCalis();
 else if (MOD === 'csv') await csvHepsi();
 else if (MOD === 'gecmis') await gecmisCalis();
 else await guncelCalis();
