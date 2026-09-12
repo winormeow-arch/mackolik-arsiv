@@ -217,18 +217,19 @@ function metinCoz(buf, ct) {
 let ardHata = 0, engel = false, ekBekle = 0, istekSay = 0;
 // Uyarlanır paralellik: Mackolik zorlanınca aynı anda giden istek sayısı düşer, rahatlayınca geri artar
 let aktif = Math.min(PARALEL, 3), seri = 0, sonDusus = 0;
-const basari = () => { ardHata = 0; ekBekle = Math.max(0, ekBekle * 0.8 - 50); if (++seri >= 15 && aktif < PARALEL) { aktif++; seri = 0; } };
+// Fren çabuk açılır: 5 başarılı istek paralelliği artırır, ek bekleme hızla erir.
+const basari = () => { ardHata = 0; ekBekle = Math.max(0, ekBekle * 0.5 - 100); if (++seri >= 5 && aktif < PARALEL) { aktif++; seri = 0; } };
 const zorlandi = ms => {
   seri = 0;
-  ekBekle = Math.min(ekBekle + ms, 6000);
-  if (Date.now() - sonDusus > 4000 && aktif > 2) { aktif--; sonDusus = Date.now(); }
+  ekBekle = Math.min(ekBekle + ms, 2500);
+  if (Date.now() - sonDusus > 8000 && aktif > 2) { aktif--; sonDusus = Date.now(); }
 };
-async function getir(url, deneme = 3) {
+async function getir(url, deneme = 3, zamanAsimi = 20000) {
   let son = null;
   for (let i = 1; i <= deneme; i++) {
     try {
       istekSay++;
-      const r = await fetch(url, { headers: HDR, redirect: 'follow', signal: AbortSignal.timeout(20000) });
+      const r = await fetch(url, { headers: HDR, redirect: 'follow', signal: AbortSignal.timeout(zamanAsimi) });
       if (r.status === 200) {
         const buf = Buffer.from(await r.arrayBuffer());
         basari();
@@ -237,12 +238,12 @@ async function getir(url, deneme = 3) {
       if (r.status === 404 || r.status === 410) throw new KaliciHata('HTTP ' + r.status);
       son = new Error('HTTP ' + r.status);
       if (r.status === 429 || r.status >= 500) zorlandi(1000);
-      if (i < deneme) await sleep(r.status === 429 || r.status === 503 ? 4000 * i : 1200 * i);
+      if (i < deneme) await sleep(r.status === 429 || r.status === 503 ? 3000 * i : 800 * i);
     } catch (e) {
       if (e instanceof KaliciHata) throw e;
       son = e;
       zorlandi(400);
-      if (i < deneme) await sleep(1200 * i);
+      if (i < deneme) await sleep(800 * i);
     }
   }
   if (++ardHata >= 30) engel = true;
@@ -473,7 +474,8 @@ const karsilastir = r => JSON.stringify({ ...r, guncel: 0 });
 
 async function macIsle(aday, tarih) {
   let html;
-  try { html = await getir(BASE + '/Match/Default.aspx?id=' + aday.id); }
+  // Maç sayfası: 10 sn zaman aşımı, 2 deneme. Kaçan maç zaten tamamlama turunda toplanır.
+  try { html = await getir(BASE + '/Match/Default.aspx?id=' + aday.id, 2, 10000); }
   catch { return false; }
 
   const r = macAyristir(html, aday);
@@ -581,7 +583,7 @@ async function durumMdYaz(tumGunler, bosSet) {
     `\`${bar}\`  **%${yuzde}**`, '',
     `- Toplanan maç: **${mac.toLocaleString('tr-TR')}**`,
     `- Taranan gün: **${dolu} / ${tumGunler.length}** · kalan ${bosSet.size} gün`,
-    `- Son güncelleme: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, '',
+    `- Son güncelleme: ${new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} (Türkiye saati)`, '',
     '## Yıllara göre', '', '| Yıl | Taranan gün | Durum |', '| --- | --- | --- |',
     ...Object.keys(yil).sort().reverse().map(y => {
       const v = yil[y], p = Math.round(v.dolu / v.top * 100);
@@ -589,6 +591,7 @@ async function durumMdYaz(tumGunler, bosSet) {
     }), '',
     'Bu dosyayı toplayıcı kendisi yazar; her turda güncellenir.'
   ];
+  await fs.mkdir(VERI, { recursive: true });
   await fs.writeFile(path.join(VERI, 'DURUM.md'), sat.join('\n') + '\n');
 }
 
